@@ -2,38 +2,34 @@
 
 Comprehensive resilience and fault-tolerance verification for HashiCorp Nomad deployments integrated with HashiCorp Consul and Docker engine.
 
----
-
-## 1. Problem Statement
+============================================================
+1. Problem Statement
+============================================================
 
 ### Objective
-
 In production environments, deployments often encounter critical failure modes such as health check failures, fatal startup crashes, unhandled deadlocks, or slow initializations. A production orchestrator must detect these unhealthy releases immediately, stop rollout progression, and revert all allocations to the last known-good state automatically without manual engineer intervention.
 
 ### What We Are Testing
-
 - Auto-Revert Enforcement: Validate deployments fail and auto-revert when endpoints fail health checks (HTTP 503).
 - Crash Loop Recovery: Prove allocations that crash on startup (exit code 1) trigger restart policies and auto-revert once restart limits are reached.
-- Timeout & Deadline Handling: Confirm allocations taking longer to initialize than healthy_deadline abort and revert cleanly.
+- Timeout and Deadline Handling: Confirm allocations taking longer to initialize than healthy_deadline abort and revert cleanly.
 - Partial Rollout Consistency: Test a 5-allocation cluster running max_parallel = 2 where an update fails midway, proving that Nomad reverts all instances (even previously successful ones) back to the clean baseline.
 - Rollback Under Load: Prove traffic sent during an active deployment failure experiences zero connection drops and continues serving healthy HTTP 200 responses.
 
----
-
-## 2. Architecture & Solution Overview
+============================================================
+2. Architecture and Solution Overview
+============================================================
 
 ### Components
-
 - Orchestrator: HashiCorp Nomad v2.0.7 (auto_revert = true, progress_deadline = 1m, healthy_deadline = 30s).
-- Service Discovery & Health Checking: HashiCorp Consul v2.0.4.
+- Service Discovery and Health Checking: HashiCorp Consul v2.0.4.
 - Runtime: Docker Engine running on WSL 2 (Ubuntu Linux).
 - Application: Lightweight Python HTTP server (app/hello.py) with environment-driven failure triggers.
 
-```text
-                +------------------------------------+
-                |       Consul Service Discovery     |
-                |   (Filters Out Unhealthy Nodes)    |
-                +-----------------+------------------+
++-------------------------------------------------------------------+
+|                     Consul Service Discovery                     |
+|                   (Filters Out Unhealthy Nodes)                   |
++---------------------------------+---------------------------------+
                                   |
             [Traffic Requests / Continuous curl Loop]
                                   |
@@ -48,17 +44,12 @@ In production environments, deployments often encounter critical failure modes s
 |   |                   |     Deadline      |    Purged)        |   |
 |   +-------------------+                   +-------------------+   |
 +-------------------------------------------------------------------+
-```
 
----
-
-## 3. Application & Docker Setup
+============================================================
+3. Application and Docker Setup
+============================================================
 
 ### Application Source (app/hello.py)
-
-This script uses standard Python libraries to dynamically respond or trigger failures based on environment variables:
-
-```python
 import os
 import socket
 import sys
@@ -73,7 +64,6 @@ PORT = int(os.getenv("PORT", "8080"))
 HOSTNAME = socket.gethostname()
 START_TIME = time.time()
 
-# Crash Loop Trigger: Immediately exit with code 1
 if CRASH_ON_START:
     print(f"[{HOSTNAME}] FATAL: Container crash triggered on startup! Exiting with code 1...", file=sys.stderr)
     sys.exit(1)
@@ -81,8 +71,6 @@ if CRASH_ON_START:
 class RollbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         uptime = time.time() - START_TIME
-        
-        # Health check endpoint inspected by Consul & Nomad
         if self.path == "/health":
             if uptime < STARTUP_DELAY:
                 self.send_response(503)
@@ -113,38 +101,27 @@ if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), RollbackHandler)
     print(f"Server started on port {PORT} | Version: {APP_VERSION}")
     server.serve_forever()
-```
 
 ### Containerfile (app/Dockerfile)
-
-```dockerfile
 FROM python:3.9-alpine
 WORKDIR /app
 COPY hello.py .
 EXPOSE 8080
 CMD ["python", "hello.py"]
-```
 
 ### Build Commands
-
-```bash
 # Build base image
 docker build -t rollback-app:v1 app/
 
 # Create version tags for distinct failure tests
 docker tag rollback-app:v1 rollback-app:v2-bad
 docker tag rollback-app:v1 rollback-app:v3-crash
-```
 
----
-
-## 4. Test Scenarios & Nomad Job Configurations
+============================================================
+4. Test Scenarios and Nomad Job Configurations
+============================================================
 
 ### Baseline: Known-Good Stable State (nomad/app-v1-baseline.nomad)
-
-Establishes 3 running instances serving healthy responses.
-
-```hcl
 job "rollback-app" {
   datacenters = ["dc1"]
   type        = "service"
@@ -205,88 +182,68 @@ job "rollback-app" {
     }
   }
 }
-```
 
 ### Scenario 1: Health Check Failure (nomad/app-v2-healthbad.nomad)
+    task "server" {
+      driver = "docker"
 
-Forces `/health` to return HTTP 503. Nomad halts rollout, marks the deployment failed after the deadline, and restores version 0.
+      config {
+        image = "rollback-app:v2-bad"
+        ports = ["http"]
+      }
 
-```hcl
-task "server" {
-  driver = "docker"
+      env {
+        APP_VERSION   = "v2-healthbad"
+        HEALTH_STATUS = "503"
+      }
 
-  config {
-    image = "rollback-app:v2-bad"
-    ports = ["http"]
-  }
-
-  env {
-    APP_VERSION   = "v2-healthbad"
-    HEALTH_STATUS = "503"
-  }
-
-  resources {
-    cpu    = 100
-    memory = 128
-  }
-}
-```
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
 
 ### Scenario 2: Crash Loop Rollback (nomad/app-v3-crash.nomad)
+    task "server" {
+      driver = "docker"
 
-Forces the process to terminate with exit code 1 immediately upon launch. Nomad executes the restart policy, exhausts attempts, and triggers auto-revert.
+      config {
+        image = "rollback-app:v3-crash"
+        ports = ["http"]
+      }
 
-```hcl
-task "server" {
-  driver = "docker"
+      env {
+        APP_VERSION    = "v3-crash"
+        CRASH_ON_START = "true"
+      }
 
-  config {
-    image = "rollback-app:v3-crash"
-    ports = ["http"]
-  }
-
-  env {
-    APP_VERSION    = "v3-crash"
-    CRASH_ON_START = "true"
-  }
-
-  resources {
-    cpu    = 100
-    memory = 128
-  }
-}
-```
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
 
 ### Scenario 3: Timeout-Based Rollback (nomad/app-v4-slow.nomad)
+    task "server" {
+      driver = "docker"
 
-Sets a 90-second initialization delay against a 30s healthy_deadline and 60s progress_deadline. Nomad identifies the allocation as stalled and restores the stable baseline.
+      config {
+        image = "rollback-app:v1"
+        ports = ["http"]
+      }
 
-```hcl
-task "server" {
-  driver = "docker"
+      env {
+        APP_VERSION   = "v4-slow"
+        STARTUP_DELAY = "90"
+      }
 
-  config {
-    image = "rollback-app:v1"
-    ports = ["http"]
-  }
-
-  env {
-    APP_VERSION   = "v4-slow"
-    STARTUP_DELAY = "90"
-  }
-
-  resources {
-    cpu    = 100
-    memory = 128
-  }
-}
-```
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
 
 ### Scenario 4: Partial Rollout Failure (nomad/app-v2-partial-fail.nomad)
-
-Runs 5 allocations with max_parallel = 2. Nomad deploys two allocations, detects failure, halts rollout, and reverts all allocations back to clean stable states.
-
-```hcl
 job "rollback-app" {
   datacenters = ["dc1"]
   type        = "service"
@@ -322,111 +279,97 @@ job "rollback-app" {
     }
   }
 }
-```
 
 ### Scenario 5: Rollback Under Continuous Traffic
-
-Continuous traffic was generated while injecting a deployment failure to ensure zero connection drops.
-
-```bash
 # Continuous traffic script executed during rollback
 while true; do
   curl -s -o /dev/null -w "%{time_total}s - Port 31749 - HTTP %{http_code}\n" http://127.0.0.1:31749/
   sleep 0.2
 done
-```
 
----
-
-## 5. Visual Evidence & Proof Gallery
+============================================================
+5. Visual Evidence and Proof Gallery
+============================================================
 
 ### Phase 1: Baseline Deployment
-
 #### 01. Baseline v1 Running Cleanly in Nomad UI
+![01_baseline_v1_healthy](screenshots/01_baseline_v1_healthy.png)
 
 #### 02. Consul Catalog Baseline Registration
+![02_consul_baseline_healthy](screenshots/02_consul_baseline_healthy.png)
 
-### Phase 2: Scenario 1 — Health Check Failure Rollback
-
+### Phase 2: Scenario 1 - Health Check Failure Rollback
 #### 03. Unhealthy Allocation Detected by Nomad
+![03_scenario1_health_failure_detected](screenshots/03_scenario1_health_failure_detected.png)
 
 #### 03b. Consul Marking Health Check Failing (Port 21003)
+![03b_consul_health_check_failing](screenshots/03b_consul_health_check_failing.png)
 
 #### 04. Automatic Rollback to Version 0 Completed
+![04_scenario1_auto_revert_success](screenshots/04_scenario1_auto_revert_success.png)
 
-### Phase 3: Scenario 2 — Crash Loop Rollback
-
-#### 05. Terminal Proof: Allocation Exit Code 1 & Restart Policy Exhaustion
+### Phase 3: Scenario 2 - Crash Loop Rollback
+#### 05. Terminal Proof: Allocation Exit Code 1 and Restart Policy Exhaustion
+![05_scenario2_crash_terminal_proof](screenshots/05_scenario2_crash_terminal_proof.png)
 
 #### 06. Nomad Deployments: Auto-Revert Triggered for Crash Loop
+![06_scenario2_crash_auto_revert](screenshots/06_scenario2_crash_auto_revert.png)
 
-### Phase 4: Scenario 3 — Timeout-Based Rollback
-
+### Phase 4: Scenario 3 - Timeout-Based Rollback
 #### 07. Nomad Waiting for Allocation During Startup Delay
+![07_scenario3_timeout_waiting](screenshots/07_scenario3_timeout_waiting.png)
 
 #### 08. Deadline Exceeded: Auto-Revert Triggered
+![08_scenario3_timeout_auto_revert](screenshots/08_scenario3_timeout_auto_revert.png)
 
-### Phase 5: Scenario 4 — Partial Rollout Failure (5 Instances, max_parallel = 2)
-
+### Phase 5: Scenario 4 - Partial Rollout Failure (5 Instances, max_parallel = 2)
 #### 09. Partial Rollout Halted and Reverted
+![09_scenario4_partial_rollout_failed](screenshots/09_scenario4_partial_rollout_failed.png)
 
 #### 09b. Deployment History Showing Sequential Auto-Reverts
+![09b_deployment_history_list](screenshots/09b_deployment_history_list.png)
 
 #### 10. Cluster Consistency Restored: All 5 Allocations Healthy on Baseline
+![10_scenario4_all_5_allocs_reverted_v1](screenshots/10_scenario4_all_5_allocs_reverted_v1.png)
 
-### Phase 6: Scenario 5 — Rollback Under Continuous Traffic
-
+### Phase 6: Scenario 5 - Rollback Under Continuous Traffic
 #### 11. Zero Dropped Requests (Continuous HTTP 200) During Active Deployment Failure
+![11_scenario5_traffic_during_rollback](screenshots/11_scenario5_traffic_during_rollback.png)
 
 #### 12. Deployment Auto-Revert Confirmed Under Live Traffic Load
+![12_scenario5_auto_revert_under_load](screenshots/12_scenario5_auto_revert_under_load.png)
 
----
+============================================================
+6. Verification Results Matrix
+============================================================
 
-## 6. Verification Results Matrix
+| Scenario | Injected Failure | Orchestrator Action | Final Cluster State | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| Scenario 1 | /health returns HTTP 503 | Gated by Consul check; progress deadline expired | Auto-reverted to v1-good | PASSED |
+| Scenario 2 | Immediate exit code 1 crash | Exhausted 2 restart attempts in 30s; marked failed | Auto-reverted to previous healthy release | PASSED |
+| Scenario 3 | 90s delay vs 30s deadline | Detected readiness stall; progress deadline aborted update | Auto-reverted to previous healthy release | PASSED |
+| Scenario 4 | 5 instances with max_parallel = 2 | Detected batch failure; stopped rollout and reverted all 5 instances | 100% consistent on v1 baseline | PASSED |
+| Scenario 5 | Traffic spike during broken rollout | Consul removed failing instances; healthy backends served traffic | Zero dropped packets; 100% HTTP 200 OK | PASSED |
 
-| **Scenario**   | **Injected Failure**                | **Orchestrator Action**                                              | **Final Cluster State**                   | **Result** |
-| -------------- | ----------------------------------- | -------------------------------------------------------------------- | ----------------------------------------- | ---------- |
-| **Scenario 1** | `/health` returns HTTP 503          | Gated by Consul check; progress deadline expired                     | Auto-reverted to v1-good                  | **PASSED** |
-| **Scenario 2** | Immediate exit code 1 crash         | Exhausted 2 restart attempts in 30s; marked failed                   | Auto-reverted to previous healthy release | **PASSED** |
-| **Scenario 3** | 90s delay vs 30s deadline           | Detected readiness stall; progress deadline aborted update           | Auto-reverted to previous healthy release | **PASSED** |
-| **Scenario 4** | 5 instances with `max_parallel = 2` | Detected batch failure; stopped rollout and reverted all 5 instances | 100% consistent on v1 baseline            | **PASSED** |
-| **Scenario 5** | Traffic spike during broken rollout | Consul removed failing instances; healthy backends served traffic    | Zero dropped packets; 100% HTTP 200 OK    | **PASSED** |
+============================================================
+7. How to Reproduce
+============================================================
 
----
-
-## 7. How to Reproduce
-
-### 1. Start Local Infrastructure
-
-```bash
+1. Start Local Infrastructure:
 consul agent -dev -ui -client=0.0.0.0 &
 nomad agent -dev -bind=0.0.0.0 -consul-address=127.0.0.1:8500 &
-```
 
-### 2. Build Docker Images
-
-```bash
+2. Build Docker Images:
 docker build -t rollback-app:v1 app/
 docker tag rollback-app:v1 rollback-app:v2-bad
 docker tag rollback-app:v1 rollback-app:v3-crash
-```
 
-### 3. Deploy Baseline
-
-```bash
+3. Deploy Baseline:
 nomad job run nomad/app-v1-baseline.nomad
-```
 
-### 4. Trigger Any Failure Scenario
-
-```bash
-# Example: Trigger health check failure
+4. Trigger Any Failure Scenario:
 nomad job run nomad/app-v2-healthbad.nomad
-```
 
-### 5. Inspect Live Status
-
-```bash
+5. Inspect Live Status:
 nomad job status rollback-app
-nomad deployment status $(nomad job status rollback-app | awk '/Latest Deployment/ {getline; print $1}')
-```
+nomad deployment status $(nomad job status rollback-app | awk '/Latest Deployment/ {getline; print $3}')

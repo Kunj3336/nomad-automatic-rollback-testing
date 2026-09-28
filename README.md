@@ -10,7 +10,7 @@ Comprehensive resilience and fault-tolerance verification for HashiCorp Nomad de
 
 In production environments, deployments often encounter critical failure modes such as health check failures, fatal startup crashes, unhandled deadlocks, or slow initializations. A production orchestrator must detect these unhealthy releases immediately, stop rollout progression, and revert all allocations to the last known-good state automatically without manual engineer intervention.
 
-### What We Are Testing (Jira Acceptance Criteria)
+### What We Are Testing
 
 - Auto-Revert Enforcement: Validate deployments fail and auto-revert when endpoints fail health checks (HTTP 503).
 - Crash Loop Recovery: Prove allocations that crash on startup (exit code 1) trigger restart policies and auto-revert once restart limits are reached.

@@ -2,9 +2,9 @@
 
 Comprehensive resilience and fault-tolerance verification for HashiCorp Nomad deployments integrated with HashiCorp Consul and Docker engine.
 
-============================================================
-1. Problem Statement
-============================================================
+---
+
+## 1. Problem Statement
 
 ### Objective
 In production environments, deployments often encounter critical failure modes such as health check failures, fatal startup crashes, unhandled deadlocks, or slow initializations. A production orchestrator must detect these unhealthy releases immediately, stop rollout progression, and revert all allocations to the last known-good state automatically without manual engineer intervention.
@@ -16,9 +16,9 @@ In production environments, deployments often encounter critical failure modes s
 - Partial Rollout Consistency: Test a 5-allocation cluster running max_parallel = 2 where an update fails midway, proving that Nomad reverts all instances (even previously successful ones) back to the clean baseline.
 - Rollback Under Load: Prove traffic sent during an active deployment failure experiences zero connection drops and continues serving healthy HTTP 200 responses.
 
-============================================================
-2. Architecture and Solution Overview
-============================================================
+---
+
+## 2. Architecture & Solution Overview
 
 ### Components
 - Orchestrator: HashiCorp Nomad v2.0.7 (auto_revert = true, progress_deadline = 1m, healthy_deadline = 30s).
@@ -45,9 +45,9 @@ In production environments, deployments often encounter critical failure modes s
 |   +-------------------+                   +-------------------+   |
 +-------------------------------------------------------------------+
 
-============================================================
-3. Application and Docker Setup
-============================================================
+---
+
+## 3. Application & Docker Setup
 
 ### Application Source (app/hello.py)
 import os
@@ -117,9 +117,9 @@ docker build -t rollback-app:v1 app/
 docker tag rollback-app:v1 rollback-app:v2-bad
 docker tag rollback-app:v1 rollback-app:v3-crash
 
-============================================================
-4. Test Scenarios and Nomad Job Configurations
-============================================================
+---
+
+## 4. Test Scenarios & Nomad Job Configurations
 
 ### Baseline: Known-Good Stable State (nomad/app-v1-baseline.nomad)
 job "rollback-app" {
